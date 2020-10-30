@@ -127,7 +127,7 @@ class CarDetector(object):
               idx_vec = []
               print("\n\nPredictions")
               for i, v in enumerate(cls):
-                  if (v in [2, 3, 4, 6, 8] and scores[i]>0.5):
+                  if (v in [2, 3, 4, 6, 8] and scores[i]>0.3):
                       idx_vec.append([v, i])
                       print(category_index[v]['name'], " with probability ", scores[i])  
               
