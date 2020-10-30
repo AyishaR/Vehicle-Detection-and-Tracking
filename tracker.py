@@ -6,23 +6,33 @@ Implement and test tracker
 import numpy as np
 from numpy import dot
 from scipy.linalg import inv, block_diag
-
+import math
 
 
 class Tracker(): # class for Kalman Filter-based tracker
-    def __init__(self):
+    def __init__(self, frameno):
         # Initialize parametes for tracker (history)
         self.id = 0  # tracker's id 
         self.box = [] # list to store the coordinates for a bounding box 
         self.hits = 0 # number of detection matches
         self.no_losses = 0 # number of unmatched tracks (track loss)
-        
+        self.frame = frameno    # frame number to serve as first checkpoint
+        self.dist_from_camera = 0     # distance from camera when vehicle was at first check point
+        self.speed = None
+        self.m1 = 0
+
+        #-- values need to be set after pre calculation----------------------------
+        self.f = 1522
+        self.a = 1/1.7
+
         # Initialize parameters for Kalman Filtering
         # The state is the (x, y) coordinates of the detection box
         # state: [up, up_dot, left, left_dot, down, down_dot, right, right_dot]
         # or[up, up_dot, left, left_dot, height, height_dot, width, width_dot]
         self.x_state=[] 
         self.dt = 1.   # time interval
+
+        self.width = {2.0: 180 , 3.0: 470, 4.0: 200, 6.0: 1800, 8.0: 1800}    # avg width of vehicle types
         
         # Process matrix, assuming constant velocity model
         self.F = np.array([[1, self.dt, 0,  0,  0,  0,  0, 0],
@@ -64,8 +74,41 @@ class Tracker(): # class for Kalman Filter-based tracker
         self.R = np.diag(R_diag_array)
         
         
+    def get_distance_from_camera(self):
         
+        p1 = self.box
+        #defining midpoints
+        m = [(p1[0] + p1[2])//2, p1[3]]
+
+        #distance measurement from centre of camera plane
+
+        d = (self.f * self.width[self.vehicle]) / (p1[2] - p1[0])
         
+        return m, d
+    
+    def get_speed(self, cur_frame,c):
+        self.frame = cur_frame
+        d1 = self.dist_from_camera
+        m2, d2 = self.get_distance_from_camera()
+        angle = self.find_angle(np.array(self.m1), np.array([c[0]/2, c[1]]), np.array(m2)) 
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+        #calculate distance as third side of triangle
+        d3 = math.sqrt((d1 * d1) + (d2 * d2) - (2 * d1 * d2 * np.cos(angle * self.a)))
+        
+        self.m1, self.dist_from_camera = m2, d2
+        
+        return d3*0.09
+        
+
+    def find_angle(self, a, b, c):
+        ba = a-b
+        bc = c-b
+    
+        co = np.dot(ba, bc)/ (np.linalg.norm(ba) * np.linalg.norm(bc))
+        angle = np.arccos(co)
+    
+        return angle
+
     def kalman_filter(self, z): 
         '''
         Implement the Kalman Filter, including the predict and the update stages,

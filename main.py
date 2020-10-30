@@ -2,17 +2,17 @@
 # -*- coding: utf-8 -*-
 """@author: kyleguan
 """
-
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
 from moviepy.editor import VideoFileClip
 from collections import deque
-from sklearn.utils.linear_assignment_ import linear_assignment
+from scipy.optimize import linear_sum_assignment
 
 import helpers
 import detector
-import tracker
+from tracker import Tracker
 
 # Global variables to be used by funcitons of VideoFileClop
 frame_count = 0 # frame counter
@@ -24,30 +24,32 @@ min_hits =1  # no. of consecutive matches needed to establish a track
 
 tracker_list =[] # list for trackers
 # list for track ID
-track_id_list= deque(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'])
+track_id_list= deque(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'])
 
-debug = True
+debug = False
 
-def assign_detections_to_trackers(trackers, detections, iou_thrd = 0.3):
+def assign_detections_to_trackers(trackers, detections, label_indices, iou_thrd = 0.3):
     '''
     From current list of trackers and new detections, output matched detections,
     unmatchted trackers, unmatched detections.
     '''    
     
-    IOU_mat= np.zeros((len(trackers),len(detections)),dtype=np.float32)
+    IOU_mat = np.zeros((len(trackers),len(detections)),dtype=np.float32)
     for t,trk in enumerate(trackers):
         #trk = convert_to_cv2bbox(trk) 
         for d,det in enumerate(detections):
          #   det = convert_to_cv2bbox(det)
-            IOU_mat[t,d] = box_iou2(trk,det) 
+            IOU_mat[t,d] = helpers.box_iou2(trk, det) 
     
     # Produces matches       
     # Solve the maximizing the sum of IOU assignment problem using the
     # Hungarian algorithm (also known as Munkres algorithm)
     
-    matched_idx = linear_assignment(-IOU_mat)        
+    indices = linear_sum_assignment(-IOU_mat)  
+    indices = np.asarray(indices)
+    matched_idx = np.transpose(indices)    
 
-    unmatched_trackers, unmatched_detections = [], []
+    unmatched_trackers, unmatched_detections, unmatched_indices  = [], [], []
     for t,trk in enumerate(trackers):
         if(t not in matched_idx[:,0]):
             unmatched_trackers.append(t)
@@ -55,6 +57,7 @@ def assign_detections_to_trackers(trackers, detections, iou_thrd = 0.3):
     for d, det in enumerate(detections):
         if(d not in matched_idx[:,1]):
             unmatched_detections.append(d)
+            unmatched_indices.append(label_indices[d])
 
     matches = []
    
@@ -74,7 +77,7 @@ def assign_detections_to_trackers(trackers, detections, iou_thrd = 0.3):
     else:
         matches = np.concatenate(matches,axis=0)
     
-    return matches, np.array(unmatched_detections), np.array(unmatched_trackers)       
+    return matches, np.array(unmatched_detections), np.array(unmatched_trackers), unmatched_indices       
     
 
 
@@ -90,12 +93,14 @@ def pipeline(img):
     global debug
     
     frame_count+=1
-    
+
+    print('\n------\nFrame: ', frame_count)
+
+
     img_dim = (img.shape[1], img.shape[0])
-    z_box = det.get_localization(img) # measurement
-    if debug:
-       print('Frame:', frame_count)
-       
+    z_box, v_indices = det.get_localization(img) # measurement
+    
+
     x_box =[]
     if debug: 
         for i in range(len(z_box)):
@@ -105,21 +110,21 @@ def pipeline(img):
     
     if len(tracker_list) > 0:
         for trk in tracker_list:
+            print(trk.id, trk.box)
             x_box.append(trk.box)
     
     
-    matched, unmatched_dets, unmatched_trks \
-    = assign_detections_to_trackers(x_box, z_box, iou_thrd = 0.3)  
+    matched, unmatched_dets, unmatched_trks, unmatched_inds = assign_detections_to_trackers(x_box, z_box, v_indices, iou_thrd = 0.3)  
     if debug:
          print('Detection: ', z_box)
          print('x_box: ', x_box)
-         print('matched:', matched)
-         print('unmatched_det:', unmatched_dets)
-         print('unmatched_trks:', unmatched_trks)
+         print('Matched:', matched)
+         print('Unmatched_det:', unmatched_dets)
+         print('Unmatched_trks:', unmatched_trks)
     
          
     # Deal with matched detections     
-    if matched.size >0:
+    if matched.size > 0:
         for trk_idx, det_idx in matched:
             z = z_box[det_idx]
             z = np.expand_dims(z, axis=0).T
@@ -137,17 +142,24 @@ def pipeline(img):
         for idx in unmatched_dets:
             z = z_box[idx]
             z = np.expand_dims(z, axis=0).T
-            tmp_trk = Tracker() # Create a new tracker
+            tmp_trk = Tracker(frame_count) # Create a new tracker
+            tmp_trk.vehicle = v_indices[idx]
+
             x = np.array([[z[0], 0, z[1], 0, z[2], 0, z[3], 0]]).T
             tmp_trk.x_state = x
             tmp_trk.predict_only()
+
             xx = tmp_trk.x_state
             xx = xx.T[0].tolist()
             xx =[xx[0], xx[2], xx[4], xx[6]]
             tmp_trk.box = xx
+            
+            tmp_trk.m1, tmp_trk.dist_from_camera = tmp_trk.get_distance_from_camera()
             tmp_trk.id = track_id_list.popleft() # assign an ID for the tracker
             tracker_list.append(tmp_trk)
             x_box.append(xx)
+
+    
     
     # Deal with unmatched tracks       
     if len(unmatched_trks)>0:
@@ -169,9 +181,14 @@ def pipeline(img):
              good_tracker_list.append(trk)
              x_cv2 = trk.box
              if debug:
-                 print('updated box: ', x_cv2)
+                 print('Updated box: ', x_cv2)
                  print()
-             img= helpers.draw_box_label(img, x_cv2) # Draw the bounding boxes on the 
+             if frame_count - trk.frame >=10:
+                 
+                 trk.speed = trk.get_speed(frame_count, img_dim)
+                 
+             
+             img= helpers.draw_box_label(img, x_cv2, trk.speed) # Draw the bounding boxes on the 
                                              # images
     # Book keeping
     deleted_tracks = filter(lambda x: x.no_losses >max_age, tracker_list)  
@@ -192,22 +209,11 @@ if __name__ == "__main__":
     
     det = detector.CarDetector()
     
-    if debug: # test on a sequence of images
-        images = [plt.imread(file) for file in glob.glob('./test_images/*.jpg')]
-        
-        for i in range(len(images))[0:7]:
-             image = images[i]
-             image_box = pipeline(image)   
-             plt.imshow(image_box)
-             plt.show()
-           
-    else: # test on a video file.
-        
-        start=time.time()
-        output = 'test_v7.mp4'
-        clip1 = VideoFileClip("project_video.mp4")#.subclip(4,49) # The first 8 seconds doesn't have any cars...
-        clip = clip1.fl_image(pipeline)
-        clip.write_videofile(output, audio=False)
-        end  = time.time()
-        
-        print(round(end-start, 2), 'Seconds to finish')
+    start=time.time()
+    output = 'test.mp4'
+    clip1 = VideoFileClip("video.mp4")#.subclip(4,49) # The first 8 seconds doesn't have any cars...
+    clip = clip1.fl_image(pipeline)
+    clip.write_videofile(output, audio=False)
+    end  = time.time()
+    
+    print(round(end-start, 2), 'Seconds to finish')

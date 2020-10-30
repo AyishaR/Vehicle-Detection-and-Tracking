@@ -18,7 +18,8 @@ cwd = os.path.dirname(os.path.realpath(__file__))
 class CarDetector(object):
     def __init__(self):
 
-        self.car_boxes = []
+        self.vehicle_boxes = []
+        self.tmp_indices = []
         
         os.chdir(cwd)
         
@@ -33,18 +34,18 @@ class CarDetector(object):
         self.detection_graph = tf.Graph()
         
         # configuration for possible GPU use
-        config = tf.ConfigProto()
+        config = tf.compat.v1.ConfigProto()
         config.gpu_options.allow_growth = True
         # load frozen tensorflow detection model and initialize 
         # the tensorflow graph
         with self.detection_graph.as_default():
-            od_graph_def = tf.GraphDef()
-            with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
+            od_graph_def = tf.compat.v1.GraphDef()
+            with tf.compat.v1.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
                serialized_graph = fid.read()
                od_graph_def.ParseFromString(serialized_graph)
                tf.import_graph_def(od_graph_def, name='')
                
-            self.sess = tf.Session(graph=self.detection_graph, config=config)
+            self.sess = tf.compat.v1.Session(graph=self.detection_graph, config=config)
             self.image_tensor = self.detection_graph.get_tensor_by_name('image_tensor:0')
               # Each box represents a part of the image where a particular object was detected.
             self.boxes = self.detection_graph.get_tensor_by_name('detection_boxes:0')
@@ -96,6 +97,8 @@ class CarDetector(object):
               (boxes, scores, classes, num_detections) = self.sess.run(
                   [self.boxes, self.scores, self.classes, self.num_detections],
                   feed_dict={self.image_tensor: image_expanded})
+
+              
           
               if visual == True:
                   vis_util.visualize_boxes_and_labels_on_image_array(
@@ -117,33 +120,46 @@ class CarDetector(object):
     
               cls = classes.tolist()
               
+              
+              #print(cls, scores)
               # The ID for car in COCO data set is 3 
-              idx_vec = [i for i, v in enumerate(cls) if ((v==3) and (scores[i]>0.3))]
+              #idx_vec = [i for i, v in enumerate(cls) if (v in [2, 3, 4, 6, 8] and scores[i]>0.1) ]
+              idx_vec = []
+              print("\n\nPredictions")
+              for i, v in enumerate(cls):
+                  if (v in [2, 3, 4, 6, 8] and scores[i]>0.5):
+                      idx_vec.append([v, i])
+                      print(category_index[v]['name'], " with probability ", scores[i])  
+              
+              #print("\n", idx_vec)
               
               if len(idx_vec) ==0:
-                  print('no detection!')
-                  self.car_boxes = []  
+                  print('No detection!')
+                  self.vehicle_boxes = []  
               else:
-                  tmp_car_boxes=[]
-                  for idx in idx_vec:
+                  tmp_boxes=[]
+                  tmp_index = []  
+                  for v, idx in idx_vec:
                       dim = image.shape[0:2]
                       box = self.box_normal_to_pixel(boxes[idx], dim)
                       box_h = box[2] - box[0]
                       box_w = box[3] - box[1]
                       ratio = box_h/(box_w + 0.01)
                       
-                      if ((ratio < 0.8) and (box_h>20) and (box_w>20)):
-                          tmp_car_boxes.append(box)
-                          print(box, ', confidence: ', scores[idx], 'ratio:', ratio)
+                      print("\nThe boxes:")
+                      if ((ratio>0.8) and (box_h>20) and (box_w>20)):
+                          tmp_boxes.append(box)
+                          tmp_index.append(v)
+                          print(box, ' Confidence: ', scores[idx], 'Ratio:', ratio)
                          
                       else:
-                          print('wrong ratio or wrong size, ', box, ', confidence: ', scores[idx], 'ratio:', ratio)
+                          print('Wrong ratio or wrong size, ', box, ' Confidence: ', scores[idx], 'Ratio:', ratio)
+                      
                           
-                          
-                  
-                  self.car_boxes = tmp_car_boxes
+                  self.tmp_indices = tmp_index        
+                  self.vehicle_boxes = tmp_boxes
              
-        return self.car_boxes
+        return self.vehicle_boxes, self.tmp_indices
         
 if __name__ == '__main__':
         # Test the performance of the detector
